@@ -1,0 +1,15 @@
+/.dart_tool
+/.idea
+/.metadata
+/analysis_options.yaml
+/android
+/build
+/desktop_app.iml
+/ios
+/linux
+/macos
+/pubspec.lock
+/pubspec.yaml
+/test
+/web
+/windows
