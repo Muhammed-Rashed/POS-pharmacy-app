@@ -4,6 +4,8 @@ import 'cart_item.dart';
 class PosTransaction {
   int? id;
   List<CartItem> items;
+  bool? isRefund;
+  int? originalTransactionId;
   double totalAmount;
   DateTime timestamp;
   bool isSynced;
@@ -16,6 +18,8 @@ class PosTransaction {
     required this.timestamp,
     this.isSynced = false,
     this.cloudId,
+    this.isRefund,
+    this.originalTransactionId,
   });
 
   Map<String, dynamic> toMap() {
@@ -26,6 +30,8 @@ class PosTransaction {
       'timestamp': timestamp.toIso8601String(),
       'is_synced': isSynced ? 1 : 0,
       'cloud_id': cloudId,
+      'isRefund': (isRefund ?? false) ? 1 : 0,
+      'originalTransactionId': originalTransactionId,
     };
   }
 
@@ -40,6 +46,8 @@ class PosTransaction {
       timestamp: DateTime.parse(map['timestamp']),
       isSynced: map['is_synced'] == 1,
       cloudId: map['cloud_id'],
+      isRefund: (map['isRefund'] ?? 0) == 1,
+      originalTransactionId: map['originalTransactionId']?.toInt(),
     );
   }
 
@@ -62,6 +70,7 @@ class PosTransaction {
       timestamp: DateTime.parse(json['timestamp']),
       isSynced: true,
       cloudId: json['id'].toString(),
+      
     );
   }
 }

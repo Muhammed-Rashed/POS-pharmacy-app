@@ -273,7 +273,12 @@ class _SalesEntryPageState extends State<SalesEntryPage> {
 
     // Create transaction
     final transaction = PosTransaction(
-      items: cartItems,
+      items: cartItems.map((item) => CartItem(
+        productId: item.productId,
+        productName: item.productName,
+        price: item.price,
+        quantity: item.quantity,
+      )).toList(),
       totalAmount: total,
       timestamp: DateTime.now(),
       isSynced: false,
@@ -440,7 +445,6 @@ class _SalesEntryPageState extends State<SalesEntryPage> {
   }
 }
 
-// Transaction History Page
 class TransactionHistoryPage extends StatefulWidget {
   const TransactionHistoryPage({super.key});
 
@@ -450,11 +454,13 @@ class TransactionHistoryPage extends StatefulWidget {
 
 class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
   List<PosTransaction> transactions = [];
+  List<Product> products = [];
 
   @override
   void initState() {
     super.initState();
     _loadTransactions();
+    _loadProducts();
   }
 
   Future<void> _loadTransactions() async {
@@ -464,6 +470,102 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     });
   }
 
+  Future<void> _loadProducts() async {
+    final loadedProducts = await DatabaseHelper.instance.getProducts();
+    setState(() {
+      products = loadedProducts;
+    });
+  }
+
+  Future<void> _processFullRefund(PosTransaction transaction) async {
+    // Create refund transaction
+    final refundTransaction = PosTransaction(
+      items: transaction.items.map((item) => CartItem(
+        productId: item.productId,
+        productName: item.productName,
+        price: item.price,
+        quantity: item.quantity,
+      )).toList(),
+      totalAmount: transaction.totalAmount,
+      timestamp: DateTime.now(),
+      isSynced: false,
+      isRefund: true,
+      originalTransactionId: transaction.id,
+    );
+
+    // Save refund transaction
+    await DatabaseHelper.instance.insertTransaction(refundTransaction);
+
+    // Restore stock
+    for (final item in transaction.items) {
+      final product = products.firstWhere((p) => p.id == item.productId);
+      product.stockQuantity += item.quantity;
+      await DatabaseHelper.instance.updateProduct(product);
+    }
+
+    await _loadTransactions();
+    await _loadProducts();
+
+    if (mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Full refund processed successfully!')),
+      );
+    }
+  }
+
+  Future<void> _showPartialRefundDialog(PosTransaction transaction) async {
+    await showDialog(
+      context: context,
+      builder: (context) => PartialRefundDialog(
+        transaction: transaction,
+        products: products,
+        onRefundComplete: () {
+          _loadTransactions();
+          _loadProducts();
+        },
+      ),
+    );
+  }
+
+  String _getTransactionStatus(PosTransaction transaction) {
+    if (transaction.isRefund == true) {
+      return 'Refunded';
+    }
+    
+    // Check if this transaction has been fully refunded
+    final refunds = transactions.where((t) => 
+      t.isRefund == true && 
+      t.originalTransactionId == transaction.id
+    ).toList();
+    
+    if (refunds.isNotEmpty) {
+      // Check if it's a full refund
+      final totalRefunded = refunds.fold<double>(0, (sum, refund) => sum + refund.totalAmount);
+      if (totalRefunded >= transaction.totalAmount) {
+        return 'Fully Refunded';
+      } else {
+        return 'Partially Refunded';
+      }
+    }
+    
+    return 'Completed';
+  }
+
+  Color _getStatusColor(String status) {
+    switch (status) {
+      case 'Refunded':
+        return Colors.red;
+      case 'Fully Refunded':
+        return Colors.red;
+      case 'Partially Refunded':
+        return Colors.orange;
+      case 'Completed':
+        return Colors.green;
+      default:
+        return Colors.grey;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     return ListView.builder(
@@ -471,11 +573,39 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
       itemCount: transactions.length,
       itemBuilder: (context, index) {
         final transaction = transactions[index];
+        final status = _getTransactionStatus(transaction);
+        final isRefundable = transaction.isRefund != true && 
+                           !status.contains('Refunded');
+
         return Card(
           margin: const EdgeInsets.only(bottom: 8),
           child: ExpansionTile(
-            title: Text('Transaction #${transaction.id}'),
-            subtitle: Text('${transaction.timestamp.toString().split('.')[0]} - \$${transaction.totalAmount.toStringAsFixed(2)}'),
+            title: Row(
+              children: [
+                Expanded(
+                  child: Text('Transaction #${transaction.id}'),
+                ),
+                Container(
+                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                  decoration: BoxDecoration(
+                    color: _getStatusColor(status).withOpacity(0.2),
+                    borderRadius: BorderRadius.circular(12),
+                    border: Border.all(color: _getStatusColor(status)),
+                  ),
+                  child: Text(
+                    status,
+                    style: TextStyle(
+                      color: _getStatusColor(status),
+                      fontSize: 12,
+                      fontWeight: FontWeight.bold,
+                    ),
+                  ),
+                ),
+              ],
+            ),
+            subtitle: Text(
+              '${transaction.timestamp.toString().split('.')[0]} - \$${transaction.totalAmount.toStringAsFixed(2)}',
+            ),
             trailing: Row(
               mainAxisSize: MainAxisSize.min,
               children: [
@@ -486,15 +616,282 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
                 if (!transaction.isSynced) const Text(' Pending'),
               ],
             ),
-            children: transaction.items.map((item) => 
-              ListTile(
-                title: Text(item.productName),
-                trailing: Text('${item.quantity} x \$${item.price.toStringAsFixed(2)}'),
-              )
-            ).toList(),
+            children: [
+              ...transaction.items.map((item) => 
+                ListTile(
+                  title: Text(item.productName),
+                  trailing: Text('${item.quantity} x \$${item.price.toStringAsFixed(2)}'),
+                )
+              ).toList(),
+              if (isRefundable) 
+                Padding(
+                  padding: const EdgeInsets.all(16),
+                  child: Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                    children: [
+                      ElevatedButton.icon(
+                        onPressed: () => _showPartialRefundDialog(transaction),
+                        icon: const Icon(Icons.edit),
+                        label: const Text('Partial Refund'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.orange,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                      ElevatedButton.icon(
+                        onPressed: () => _showFullRefundConfirmation(transaction),
+                        icon: const Icon(Icons.undo),
+                        label: const Text('Full Refund'),
+                        style: ElevatedButton.styleFrom(
+                          backgroundColor: Colors.red,
+                          foregroundColor: Colors.white,
+                        ),
+                      ),
+                    ],
+                  ),
+                ),
+            ],
           ),
         );
       },
+    );
+  }
+
+  Future<void> _showFullRefundConfirmation(PosTransaction transaction) async {
+    final confirmed = await showDialog<bool>(
+      context: context,
+      builder: (context) => AlertDialog(
+        title: const Text('Confirm Full Refund'),
+        content: Text(
+          'Are you sure you want to refund the entire transaction of \$${transaction.totalAmount.toStringAsFixed(2)}?\n\nThis will restore all items to stock.',
+        ),
+        actions: [
+          TextButton(
+            onPressed: () => Navigator.pop(context, false),
+            child: const Text('Cancel'),
+          ),
+          ElevatedButton(
+            onPressed: () => Navigator.pop(context, true),
+            style: ElevatedButton.styleFrom(backgroundColor: Colors.red),
+            child: const Text('Refund', style: TextStyle(color: Colors.white)),
+          ),
+        ],
+      ),
+    );
+
+    if (confirmed == true) {
+      await _processFullRefund(transaction);
+    }
+  }
+}
+
+// Partial Refund Dialog
+class PartialRefundDialog extends StatefulWidget {
+  final PosTransaction transaction;
+  final List<Product> products;
+  final VoidCallback onRefundComplete;
+
+  const PartialRefundDialog({
+    super.key,
+    required this.transaction,
+    required this.products,
+    required this.onRefundComplete,
+  });
+
+  @override
+  State<PartialRefundDialog> createState() => _PartialRefundDialogState();
+}
+
+class _PartialRefundDialogState extends State<PartialRefundDialog> {
+  late List<CartItem> refundItems;
+
+  @override
+  void initState() {
+    super.initState();
+    // Initialize refund items with zero quantities
+    refundItems = widget.transaction.items.map((item) => CartItem(
+      productId: item.productId,
+      productName: item.productName,
+      price: item.price,
+      quantity: 0,
+    )).toList();
+  }
+
+  void _updateRefundQuantity(int index, int newQuantity) {
+    final maxQuantity = widget.transaction.items[index].quantity;
+    setState(() {
+      refundItems[index].quantity = newQuantity.clamp(0, maxQuantity);
+    });
+  }
+
+  double get refundTotal => refundItems.fold(0, (sum, item) => sum + (item.price * item.quantity));
+
+  bool get hasRefundItems => refundItems.any((item) => item.quantity > 0);
+
+  Future<void> _processPartialRefund() async {
+    if (!hasRefundItems) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        const SnackBar(content: Text('Please select items to refund')),
+      );
+      return;
+    }
+
+    // Create refund transaction with only the refunded items
+    final refundTransaction = PosTransaction(
+      items: refundItems.where((item) => item.quantity > 0).toList(),
+      totalAmount: refundTotal,
+      timestamp: DateTime.now(),
+      isSynced: false,
+      isRefund: true,
+      originalTransactionId: widget.transaction.id,
+    );
+
+    // Save refund transaction
+    await DatabaseHelper.instance.insertTransaction(refundTransaction);
+
+    // Restore stock for refunded items
+    for (final refundItem in refundItems.where((item) => item.quantity > 0)) {
+      final product = widget.products.firstWhere((p) => p.id == refundItem.productId);
+      product.stockQuantity += refundItem.quantity;
+      await DatabaseHelper.instance.updateProduct(product);
+    }
+
+    widget.onRefundComplete();
+    
+    if (mounted) {
+      Navigator.pop(context);
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(content: Text('Partial refund of \$${refundTotal.toStringAsFixed(2)} processed successfully!')),
+      );
+    }
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    return Dialog(
+      child: Container(
+        width: MediaQuery.of(context).size.width * 0.8,
+        height: MediaQuery.of(context).size.height * 0.8,
+        padding: const EdgeInsets.all(16),
+        child: Column(
+          children: [
+            Row(
+              children: [
+                const Expanded(
+                  child: Text(
+                    'Partial Refund',
+                    style: TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
+                  ),
+                ),
+                IconButton(
+                  onPressed: () => Navigator.pop(context),
+                  icon: const Icon(Icons.close),
+                ),
+              ],
+            ),
+            const Divider(),
+            Expanded(
+              child: ListView.builder(
+                itemCount: widget.transaction.items.length,
+                itemBuilder: (context, index) {
+                  final originalItem = widget.transaction.items[index];
+                  final refundItem = refundItems[index];
+                  
+                  return Card(
+                    margin: const EdgeInsets.symmetric(vertical: 4),
+                    child: Padding(
+                      padding: const EdgeInsets.all(12),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: [
+                          Text(
+                            originalItem.productName,
+                            style: const TextStyle(fontWeight: FontWeight.bold),
+                          ),
+                          Text('\$${originalItem.price.toStringAsFixed(2)} each'),
+                          const SizedBox(height: 8),
+                          Row(
+                            children: [
+                              Text('Original: ${originalItem.quantity}'),
+                              const Spacer(),
+                              const Text('Refund: '),
+                              Row(
+                                mainAxisSize: MainAxisSize.min,
+                                children: [
+                                  IconButton(
+                                    onPressed: refundItem.quantity > 0 
+                                      ? () => _updateRefundQuantity(index, refundItem.quantity - 1)
+                                      : null,
+                                    icon: const Icon(Icons.remove),
+                                  ),
+                                  Container(
+                                    width: 40,
+                                    alignment: Alignment.center,
+                                    child: Text('${refundItem.quantity}'),
+                                  ),
+                                  IconButton(
+                                    onPressed: refundItem.quantity < originalItem.quantity 
+                                      ? () => _updateRefundQuantity(index, refundItem.quantity + 1)
+                                      : null,
+                                    icon: const Icon(Icons.add),
+                                  ),
+                                ],
+                              ),
+                            ],
+                          ),
+                        ],
+                      ),
+                    ),
+                  );
+                },
+              ),
+            ),
+            const Divider(),
+            Padding(
+              padding: const EdgeInsets.all(16),
+              child: Column(
+                children: [
+                  Row(
+                    mainAxisAlignment: MainAxisAlignment.spaceBetween,
+                    children: [
+                      const Text(
+                        'Refund Total:',
+                        style: TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                      Text(
+                        '\$${refundTotal.toStringAsFixed(2)}',
+                        style: const TextStyle(fontSize: 18, fontWeight: FontWeight.bold),
+                      ),
+                    ],
+                  ),
+                  const SizedBox(height: 16),
+                  Row(
+                    children: [
+                      Expanded(
+                        child: OutlinedButton(
+                          onPressed: () => Navigator.pop(context),
+                          child: const Text('Cancel'),
+                        ),
+                      ),
+                      const SizedBox(width: 16),
+                      Expanded(
+                        child: ElevatedButton(
+                          onPressed: hasRefundItems ? _processPartialRefund : null,
+                          style: ElevatedButton.styleFrom(
+                            backgroundColor: Colors.red,
+                            foregroundColor: Colors.white,
+                          ),
+                          child: const Text('Process Refund'),
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
+            ),
+          ],
+        ),
+      ),
     );
   }
 }
@@ -569,7 +966,7 @@ class _StockPageState extends State<StockPage> {
                     mainAxisAlignment: MainAxisAlignment.center,
                     crossAxisAlignment: CrossAxisAlignment.end,
                     children: [
-                      Text('\$${product.price.toStringAsFixed(2)}'),
+                      Text('\${product.price.toStringAsFixed(2)}'),
                       Text(
                         'Stock: ${product.stockQuantity}',
                         style: TextStyle(

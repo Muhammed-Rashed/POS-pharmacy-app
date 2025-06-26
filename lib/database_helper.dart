@@ -49,7 +49,9 @@ class DatabaseHelper {
         total_amount REAL NOT NULL,
         timestamp TEXT NOT NULL,
         is_synced INTEGER NOT NULL DEFAULT 0,
-        cloud_id TEXT
+        cloud_id TEXT,
+        isRefund INTEGER DEFAULT 0,
+        originalTransactionId INTEGER
       )
     ''');
 
