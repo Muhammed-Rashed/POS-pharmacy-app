@@ -1,184 +1,121 @@
-import 'dart:convert';
-import 'package:http/http.dart' as http;
+import 'package:flutter/material.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:shared_preferences/shared_preferences.dart';
+
 import 'database_helper.dart';
 import 'product.dart';
+import 'transaction.dart';
+import 'conflict_resolver.dart';
 
 class SyncService {
-  static const String baseUrl = 'https://your-api-endpoint.com/api'; // Replace with your actual API endpoint
-  static const String productsEndpoint = '$baseUrl/products';
-  static const String transactionsEndpoint = '$baseUrl/transactions';
-  static const String stockUpdateEndpoint = '$baseUrl/stock-update';
-  
+  static const String baseUrl = 'https://your-api-endpoint.com/api'; // not used here
+  final FirebaseFirestore firestore = FirebaseFirestore.instance;
   final DatabaseHelper _db = DatabaseHelper.instance;
 
   Future<void> performSync() async {
     try {
+      print('🔄 Starting sync process...');
+
       await syncTransactionsToCloud();
       await syncProductsFromCloud();
       await syncStockUpdatesToCloud();
       await _updateLastSyncTime();
-      print('Sync completed successfully');
+
+      print('✅ Sync completed successfully');
     } catch (e) {
-      print('Sync failed: $e');
+      print('❌ Sync failed: $e');
     }
   }
 
-  Future<void> syncTransactionsToCloud() async {
-    final unsyncedTransactions = await _db.getUnsyncedTransactions();
-    
-    for (final transaction in unsyncedTransactions) {
-      try {
-        final response = await http.post(
-          Uri.parse(transactionsEndpoint),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ${await _getAuthToken()}',
-          },
-          body: jsonEncode(transaction.toJson()),
-        );
-
-        if (response.statusCode == 201) {
-          final responseData = jsonDecode(response.body);
-          await _db.markTransactionAsSynced(
-            transaction.id!,
-            responseData['id'].toString(),
-          );
-          print('Transaction ${transaction.id} synced successfully');
-        } else {
-          print('Failed to sync transaction ${transaction.id}: ${response.statusCode}');
-        }
-      } catch (e) {
-        print('Error syncing transaction ${transaction.id}: $e');
-      }
-    }
-  }
-
-  Future<void> syncProductsFromCloud() async {
+  Future<String> manualSync(BuildContext context) async {
     try {
-      final response = await http.get(
-        Uri.parse(productsEndpoint),
-        headers: {
-          'Authorization': 'Bearer ${await _getAuthToken()}',
-        },
-      );
-
-      if (response.statusCode == 200) {
-        final List<dynamic> productsJson = jsonDecode(response.body);
-        
-        for (final productJson in productsJson) {
-          final cloudProduct = Product.fromJson(productJson);
-          final existingProduct = await _db.getProductByBarcode(cloudProduct.barcode);
-          
-          if (existingProduct == null) {
-            // New product from cloud
-            await _db.insertProduct(cloudProduct);
-          } else {
-            // Update existing product if cloud version is newer
-            if (cloudProduct.lastUpdated.isAfter(existingProduct.lastUpdated)) {
-              cloudProduct.id = existingProduct.id;
-              await _db.updateProduct(cloudProduct);
-            }
-          }
-        }
-        print('Products synced from cloud successfully');
-      }
+      await performSync();
+      _showSnackBar(context, 'Sync completed successfully.');
+      return 'Sync completed';
     } catch (e) {
-      print('Error syncing products from cloud: $e');
+      _showSnackBar(context, 'Sync failed: $e', isError: true);
+      return 'Sync failed';
     }
   }
 
-  Future<void> syncStockUpdatesToCloud() async {
-    final unsyncedProducts = await _db.getUnsyncedProducts();
-    
-    for (final product in unsyncedProducts) {
-      try {
-        final response = await http.put(
-          Uri.parse('$stockUpdateEndpoint/${product.id}'),
-          headers: {
-            'Content-Type': 'application/json',
-            'Authorization': 'Bearer ${await _getAuthToken()}',
-          },
-          body: jsonEncode({
-            'stock_quantity': product.stockQuantity,
-            'last_updated': product.lastUpdated.toIso8601String(),
-          }),
-        );
-
-        if (response.statusCode == 200) {
-          await _db.markProductAsSynced(product.id!);
-          print('Stock update for product ${product.id} synced successfully');
-        } else {
-          print('Failed to sync stock for product ${product.id}: ${response.statusCode}');
-        }
-      } catch (e) {
-        print('Error syncing stock for product ${product.id}: $e');
-      }
+  void _showSnackBar(BuildContext context, String message, {bool isError = false}) {
+    if (context.mounted) {
+      ScaffoldMessenger.of(context).showSnackBar(
+        SnackBar(
+          content: Text(message),
+          backgroundColor: isError ? Colors.red : Colors.green,
+        ),
+      );
     }
-  }
-
-  Future<String> _getAuthToken() async {
-    final prefs = await SharedPreferences.getInstance();
-    return prefs.getString('auth_token') ?? '';
   }
 
   Future<void> _updateLastSyncTime() async {
     final prefs = await SharedPreferences.getInstance();
-    await prefs.setString('last_sync', DateTime.now().toIso8601String());
+    await prefs.setString('last_sync_time', DateTime.now().toIso8601String());
   }
 
-  Future<DateTime?> getLastSyncTime() async {
+  Future<void> logSyncActivity(String result) async {
     final prefs = await SharedPreferences.getInstance();
-    final lastSyncString = prefs.getString('last_sync');
-    return lastSyncString != null ? DateTime.parse(lastSyncString) : null;
+    await prefs.setString('last_sync_result', result);
+    await prefs.setString('last_sync_time', DateTime.now().toIso8601String());
   }
-}
 
-// api_service.dart
-
-class ApiService {
-  static const String baseUrl = 'https://your-api-endpoint.com/api';
-  
-  static Future<Map<String, String>> _getHeaders() async {
+  Future<String?> getLastSyncResult() async {
     final prefs = await SharedPreferences.getInstance();
-    final token = prefs.getString('auth_token') ?? '';
-    
-    return {
-      'Content-Type': 'application/json',
-      'Authorization': 'Bearer $token',
-    };
+    return prefs.getString('last_sync_result');
   }
 
-  static Future<http.Response> get(String endpoint) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl$endpoint');
-    return await http.get(uri, headers: headers);
+  Future<void> schedulePeriodicSync() async {
+    // WorkManager plugin would be needed
   }
 
-  static Future<http.Response> post(String endpoint, Map<String, dynamic> data) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl$endpoint');
-    return await http.post(uri, headers: headers, body: jsonEncode(data));
+  // 🔁 PUSH unsynced local transactions to Firestore
+  Future<void> syncTransactionsToCloud() async {
+    final unsynced = await _db.getUnsyncedTransactions();
+
+    for (final tx in unsynced) {
+      final doc = await firestore.collection('transactions').add(tx.toMap());
+      await _db.markTransactionAsSynced(tx.id!, doc.id);
+      print("☁️ Synced transaction ${tx.id} to Firestore");
+    }
   }
 
-  static Future<http.Response> put(String endpoint, Map<String, dynamic> data) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl$endpoint');
-    return await http.put(uri, headers: headers, body: jsonEncode(data));
+  // 🔁 PULL Firestore products and resolve conflict
+  Future<void> syncProductsFromCloud() async {
+    final cloudSnapshot = await firestore.collection('products').get();
+    final localProducts = await _db.getProducts();
+
+    List<Product> cloudProducts = cloudSnapshot.docs.map((doc) {
+      final data = doc.data();
+      return Product(
+        id: null,
+        name: data['name'],
+        barcode: data['barcode'],
+        price: (data['price'] as num).toDouble(),
+        stockQuantity: data['stock_quantity'],
+        lastUpdated: DateTime.parse(data['last_updated']),
+        isSynced: true,
+      );
+    }).toList();
+
+    await ConflictResolver.resolveStockConflicts(localProducts, cloudProducts);
   }
 
-  static Future<http.Response> delete(String endpoint) async {
-    final headers = await _getHeaders();
-    final uri = Uri.parse('$baseUrl$endpoint');
-    return await http.delete(uri, headers: headers);
-  }
+  // 🔁 PUSH local unsynced products to Firestore
+  Future<void> syncStockUpdatesToCloud() async {
+    final unsynced = await _db.getUnsyncedProducts();
 
-  static Future<bool> testConnection() async {
-    try {
-      final response = await get('/health');
-      return response.statusCode == 200;
-    } catch (e) {
-      return false;
+    for (final product in unsynced) {
+      await firestore.collection('products').doc(product.barcode).set({
+        'name': product.name,
+        'barcode': product.barcode,
+        'price': product.price,
+        'stock_quantity': product.stockQuantity,
+        'last_updated': product.lastUpdated.toIso8601String(),
+      });
+
+      await _db.markProductAsSynced(product.id!);
+      print("☁️ Synced ${product.name} to Firestore");
     }
   }
 }

@@ -35,10 +35,20 @@ class PosTransaction {
     };
   }
 
-  factory PosTransaction.fromMap(Map<String, dynamic> map) {
-    List<dynamic> itemsJson = jsonDecode(map['items']);
+ factory PosTransaction.fromMap(Map<String, dynamic> map) {
+    final rawItems = map['items'];
+    List<dynamic> itemsJson;
+
+    if (rawItems is String) {
+      itemsJson = jsonDecode(rawItems);
+    } else if (rawItems is List) {
+      itemsJson = rawItems;
+    } else {
+      itemsJson = []; // Fallback for safety
+    }
+
     List<CartItem> items = itemsJson.map((item) => CartItem.fromMap(item)).toList();
-    
+
     return PosTransaction(
       id: map['id'],
       items: items,
@@ -51,26 +61,29 @@ class PosTransaction {
     );
   }
 
-  Map<String, dynamic> toJson() {
-    return {
-      'id': cloudId,
-      'items': items.map((item) => item.toJson()).toList(),
-      'total_amount': totalAmount,
-      'timestamp': timestamp.toIso8601String(),
-    };
-  }
+  factory PosTransaction.fromJson(Map<String, dynamic> json, {String? cloudId}) {
+    final rawItems = json['items'];
+    List<dynamic> itemsJson;
 
-  factory PosTransaction.fromJson(Map<String, dynamic> json) {
-    List<dynamic> itemsJson = json['items'];
-    List<CartItem> items = itemsJson.map((item) => CartItem.fromJson(item)).toList();
-    
+    if (rawItems is String) {
+      itemsJson = jsonDecode(rawItems); // convert from string to List
+    } else if (rawItems is List) {
+      itemsJson = rawItems;
+    } else {
+      itemsJson = [];
+    }
+
     return PosTransaction(
-      items: items,
-      totalAmount: json['total_amount'].toDouble(),
+      items: itemsJson.map((item) => CartItem.fromJson(item)).toList(),
+      totalAmount: (json['total_amount'] as num).toDouble(),
       timestamp: DateTime.parse(json['timestamp']),
       isSynced: true,
-      cloudId: json['id'].toString(),
-      
+      cloudId: cloudId ?? json['id']?.toString(),
+      isRefund: json['isRefund'] is int
+          ? json['isRefund'] == 1
+          : json['isRefund'] as bool?,
+      originalTransactionId: json['originalTransactionId'],
     );
   }
+
 }

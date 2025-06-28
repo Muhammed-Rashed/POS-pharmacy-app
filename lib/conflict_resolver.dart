@@ -51,4 +51,15 @@ class ConflictResolver {
       isSynced: false, // Mark for sync to propagate the merged data
     );
   }
+  
+  static Future<bool> hasStockConflict({
+  required Product localProduct,
+  required int quantitySoldOffline,
+  required int cloudStock,
+  }) 
+  async {
+    // If cloud has less stock than what was sold locally — it's a conflict
+    return cloudStock < quantitySoldOffline;
+  }
+
 }
