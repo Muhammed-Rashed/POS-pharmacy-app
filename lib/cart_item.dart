@@ -1,14 +1,14 @@
 class CartItem {
   int productId;
   String productName;
-  String barcode; // ✅ New field
+  String barcode;
   double price;
   int quantity;
 
   CartItem({
     required this.productId,
     required this.productName,
-    required this.barcode, // ✅ Add here
+    required this.barcode,
     required this.price,
     required this.quantity,
   });
@@ -17,7 +17,7 @@ class CartItem {
     return {
       'product_id': productId,
       'product_name': productName,
-      'barcode': barcode, // ✅ Add here
+      'barcode': barcode,
       'price': price,
       'quantity': quantity,
     };
@@ -27,7 +27,7 @@ class CartItem {
     return CartItem(
       productId: map['product_id'],
       productName: map['product_name'],
-      barcode: map['barcode'], // ✅ Add here
+      barcode: map['barcode'],
       price: map['price'],
       quantity: map['quantity'],
     );
@@ -37,7 +37,7 @@ class CartItem {
     return {
       'product_id': productId,
       'product_name': productName,
-      'barcode': barcode, // ✅ Add here
+      'barcode': barcode,
       'price': price,
       'quantity': quantity,
     };
@@ -47,7 +47,7 @@ class CartItem {
     return CartItem(
       productId: json['product_id'],
       productName: json['product_name'],
-      barcode: json['barcode'], // ✅ Add here
+      barcode: json['barcode'],
       price: json['price'].toDouble(),
       quantity: json['quantity'],
     );

@@ -44,7 +44,7 @@ class PosTransaction {
     } else if (rawItems is List) {
       itemsJson = rawItems;
     } else {
-      itemsJson = []; // Fallback for safety
+      itemsJson = [];
     }
 
     List<CartItem> items = itemsJson.map((item) => CartItem.fromMap(item)).toList();
@@ -66,7 +66,7 @@ class PosTransaction {
     List<dynamic> itemsJson;
 
     if (rawItems is String) {
-      itemsJson = jsonDecode(rawItems); // convert from string to List
+      itemsJson = jsonDecode(rawItems);
     } else if (rawItems is List) {
       itemsJson = rawItems;
     } else {
