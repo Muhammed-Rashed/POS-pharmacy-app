@@ -155,7 +155,13 @@ class CartManager extends ChangeNotifier {
       // Check if adding this quantity would exceed available stock
       final existingItem = activeCart!.items.firstWhere(
         (item) => item.productId == product.id,
-        orElse: () => CartItem(productId: -1, productName: '', price: 0, quantity: 0),
+        orElse: () => CartItem(
+          productId: -1,
+          productName: '',
+          barcode: '',
+          price: 0,
+          quantity: 0,
+        ),
       );
 
       final totalRequestedQuantity = (existingItem.productId != -1 ? existingItem.quantity : 0) + quantity;
@@ -169,6 +175,7 @@ class CartManager extends ChangeNotifier {
       final cartItem = CartItem(
         productId: product.id!,
         productName: product.name,
+        barcode: product.barcode,
         price: product.price,
         quantity: quantity,
       );

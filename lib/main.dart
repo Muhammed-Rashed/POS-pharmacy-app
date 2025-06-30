@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 import 'package:connectivity_plus/connectivity_plus.dart';
+import 'package:shared_preferences/shared_preferences.dart';
 import 'package:firebase_core/firebase_core.dart';
 import 'firebase_options.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
@@ -16,18 +17,25 @@ import 'cart_manager.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
+  // Initialize SQLite FFI (local database for desktop) FIRST
+  sqfliteFfiInit();
+  databaseFactory = databaseFactoryFfi;
+
   // Initialize Firebase (cloud backend)
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
 
-  // Initialize SQLite FFI (local database for desktop)
-  sqfliteFfiInit();
-  databaseFactory = databaseFactoryFfi;
-
-  // Make sure database is ready before app runs
+  // Make sure database is ready before sync
   await DatabaseHelper.instance.database;
 
+  final prefs = await SharedPreferences.getInstance();
+  final hasInitialized = prefs.getBool('has_initialized_cloud') ?? false;
+
+  if (!hasInitialized) {
+    await SyncService().syncStockUpdatesToCloud(force: true);
+    await prefs.setBool('has_initialized_cloud', true);
+  }
   runApp(const MyApp());
 }
 
@@ -134,7 +142,7 @@ class _MyAppState extends State<MyApp> {
     );
   }
 
-  Widget _buildDrawer() {
+ Widget _buildDrawer() {
     return Drawer(
       child: ListView(
         padding: EdgeInsets.zero,
@@ -142,11 +150,12 @@ class _MyAppState extends State<MyApp> {
           DrawerHeader(
             decoration: const BoxDecoration(color: Colors.cyan),
             child: Column(
-              
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
-                const Text('Pharmacy POS', 
-                  style: TextStyle(color: Colors.white, fontSize: 24)),
+                const Text(
+                  'Pharmacy POS',
+                  style: TextStyle(color: Colors.white, fontSize: 24),
+                ),
                 const SizedBox(height: 10),
                 Row(
                   children: [
@@ -167,18 +176,32 @@ class _MyAppState extends State<MyApp> {
               ],
             ),
           ),
-          ListTile(
-            leading: const Icon(Icons.sync),
-            title: const Text('Sync Now'),
-            enabled: isOnline,
-            onTap: isOnline ? () {
-              _syncService.performSync();
-              Navigator.pop(context);
-            } : null,
+
+          // Sync Now ListTile wrapped with Builder
+          Builder(
+            builder: (innerContext) => ListTile(
+              leading: const Icon(Icons.sync),
+              title: const Text('Sync Now'),
+              enabled: isOnline,
+              onTap: isOnline
+                  ? () {
+                      _syncService.performSync();
+                      Navigator.pop(innerContext); // Safe context
+                    }
+                  : null,
+            ),
           ),
-          const ListTile(
-            leading: Icon(Icons.settings),
-            title: Text('Settings'),
+
+          // Settings tile (optional: wrap with Builder if needed)
+          Builder(
+            builder: (innerContext) => ListTile(
+              leading: const Icon(Icons.settings),
+              title: const Text('Settings'),
+              onTap: () {
+                Navigator.pop(innerContext); // Optional: close drawer
+                // Navigate to settings if needed
+              },
+            ),
           ),
         ],
       ),
@@ -326,67 +349,76 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
 
   bool isOfflineMode = false;
 
-Future<void> _checkout() async {
-  final cartManager = Provider.of<CartManager>(context, listen: false);
-  final activeCart = cartManager.activeCart;
+  Future<void> _checkout() async {
+    final cartManager = Provider.of<CartManager>(context, listen: false);
+    final activeCart = cartManager.activeCart;
 
-  if (activeCart == null) {
-    _showErrorSnackBar('No active cart');
-    return;
+    if (activeCart == null) {
+      _showErrorSnackBar('No active cart');
+      return;
+    }
+
+    try {
+      //  Validate cart contents
+      cartManager.validateCartForCheckout(activeCart);
+
+      //  Build transaction object
+      final transaction = PosTransaction(
+        items: activeCart.items.map((item) {
+        final product = products.firstWhere((p) => p.id == item.productId);
+        return CartItem(
+          productId: item.productId,
+          productName: item.productName,
+          barcode: product.barcode, //  Add barcode from Product
+          price: item.price,
+          quantity: item.quantity,
+        );
+      }).toList(),
+        totalAmount: activeCart.total,
+        timestamp: DateTime.now(),
+        isSynced: false,
+        isRefund: false,
+      );
+
+      final transactionId = await DatabaseHelper.instance.insertTransaction(transaction);
+      print('Inserted transaction ID: $transactionId');
+
+      if (transactionId == 0) {
+        throw Exception('Transaction insert failed');
+      }
+
+      for (final cartItem in activeCart.items) {
+        final product = products.firstWhere((p) => p.id == cartItem.productId);
+        product.stockQuantity -= cartItem.quantity;
+        await DatabaseHelper.instance.updateProduct(product);
+      }
+
+      final connectivityResult = await Connectivity().checkConnectivity();
+      isOfflineMode = connectivityResult == ConnectivityResult.none;
+
+      //  Sync only if online
+      if (!isOfflineMode) {
+        await SyncService().performSync();
+      } else {
+        print("🛑 Offline mode is ON. Skipping sync.");
+      }
+
+      //  Clear cart and update UI
+      cartManager.closeCart(cartManager.activeCartIndex);
+      _updateCartTabController();
+      await _loadProducts();
+
+      widget.onSaleCompleted?.call();
+      _showSuccessSnackBar(
+        'Checkout successful${isOfflineMode ? ' (offline)' : ' and synced to cloud'}',
+      );
+
+    } catch (e) {
+      _showErrorSnackBar('Checkout failed: $e');
+    }
   }
 
-  try {
-    // ✅ Validate cart contents
-    cartManager.validateCartForCheckout(activeCart);
 
-    // ✅ Build transaction object
-    final transaction = PosTransaction(
-      items: activeCart.items.map((item) => CartItem(
-        productId: item.productId,
-        productName: item.productName,
-        price: item.price,
-        quantity: item.quantity,
-      )).toList(),
-      totalAmount: activeCart.total,
-      timestamp: DateTime.now(),
-      isSynced: false,
-      isRefund: false,
-    );
-
-    final transactionId = await DatabaseHelper.instance.insertTransaction(transaction);
-    print('Inserted transaction ID: $transactionId');
-
-    if (transactionId == 0) {
-      throw Exception('Transaction insert failed');
-    }
-
-    for (final cartItem in activeCart.items) {
-      final product = products.firstWhere((p) => p.id == cartItem.productId);
-      product.stockQuantity -= cartItem.quantity;
-      await DatabaseHelper.instance.updateProduct(product);
-    }
-
-    // ✅ Sync to cloud if online
-    if (!isOfflineMode) {
-      await SyncService().performSync();
-    } else {
-      print("🛑 Offline mode is ON. Skipping sync.");
-    }
-
-    // ✅ Clear cart and update UI
-    cartManager.closeCart(cartManager.activeCartIndex);
-    _updateCartTabController();
-
-    await _loadProducts();
-
-    widget.onSaleCompleted?.call();
-    _showSuccessSnackBar(
-      'Checkout successful${isOfflineMode ? ' (offline)' : ' and synced to cloud'}');
-
-  } catch (e) {
-    _showErrorSnackBar('Checkout failed: $e');
-  }
-}
 
   void _showErrorSnackBar(String message) {
     ScaffoldMessenger.of(context).showSnackBar(
@@ -771,11 +803,12 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     // Create refund transaction
     final refundTransaction = PosTransaction(
       items: transaction.items.map((item) => CartItem(
-        productId: item.productId,
-        productName: item.productName,
-        price: item.price,
-        quantity: item.quantity,
-      )).toList(),
+      productId: item.productId,
+      productName: item.productName,
+      barcode: item.barcode,
+      price: item.price,
+      quantity: item.quantity,
+    )).toList(),
       totalAmount: transaction.totalAmount,
       timestamp: DateTime.now(),
       isSynced: false,
@@ -1002,6 +1035,7 @@ class _PartialRefundDialogState extends State<PartialRefundDialog> {
     refundItems = widget.transaction.items.map((item) => CartItem(
       productId: item.productId,
       productName: item.productName,
+      barcode: item.barcode,
       price: item.price,
       quantity: 0,
     )).toList();

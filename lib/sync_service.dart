@@ -4,6 +4,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 
 import 'database_helper.dart';
 import 'product.dart';
+import 'transaction.dart';
 import 'conflict_resolver.dart';
 
 class SyncService {
@@ -13,16 +14,16 @@ class SyncService {
 
   Future<void> performSync() async {
     try {
-      print('🔄 Starting sync process...');
+      print('Starting sync process...');
 
       await syncTransactionsToCloud();
       await syncProductsFromCloud();
       await syncStockUpdatesToCloud();
       await _updateLastSyncTime();
 
-      print('✅ Sync completed successfully');
+      print('Sync completed successfully');
     } catch (e) {
-      print('❌ Sync failed: $e');
+      print('Sync failed: $e');
     }
   }
 
@@ -64,18 +65,45 @@ class SyncService {
     return prefs.getString('last_sync_result');
   }
 
-  Future<void> schedulePeriodicSync() async {
-    // WorkManager plugin would be needed
-  }
 
-  // 🔁 PUSH unsynced local transactions to Firestore
+  // PUSH unsynced local transactions to Firestore
   Future<void> syncTransactionsToCloud() async {
     final unsynced = await _db.getUnsyncedTransactions();
 
-    if (unsynced.isEmpty) return;
+    for (final tx in unsynced) {
+      final doc = await firestore.collection('transactions').add(tx.toMap());
+      await _db.markTransactionAsSynced(tx.id!, doc.id);
+      print("Synced transaction ${tx.id} to Firestore");
 
+      // 🔁 Now update Firestore stock based on this transaction
+      for (final item in tx.items) {
+        final productRef = firestore.collection('products').doc(item.barcode);
+        final snapshot = await productRef.get();
+
+        if (snapshot.exists) {
+          final data = snapshot.data()!;
+          final currentStock = data['stock_quantity'] ?? 0;
+          final newStock = currentStock - item.quantity;
+
+          await productRef.update({
+            'stock_quantity': newStock,
+            'last_updated': DateTime.now().toIso8601String(),
+          });
+
+          print('Updated stock for ${item.productName} in Firestore: $newStock');
+        } else {
+          print('Product ${item.productName} not found in Firestore');
+        }
+      }
+    }
+  }
+
+  // PULL Firestore products and resolve conflict
+  Future<void> syncProductsFromCloud() async {
     final cloudSnapshot = await firestore.collection('products').get();
-    final cloudProducts = cloudSnapshot.docs.map((doc) {
+    final localProducts = await _db.getProducts();
+
+    List<Product> cloudProducts = cloudSnapshot.docs.map((doc) {
       final data = doc.data();
       return Product(
         id: null,
@@ -88,91 +116,28 @@ class SyncService {
       );
     }).toList();
 
-    for (final tx in unsynced) {
-      final refundableItems = await ConflictResolver.resolveOfflineConflictItems(
-        items: tx.items,
-        cloudProducts: cloudProducts,
-      );
-
-      if (refundableItems.isEmpty) {
-        final doc = await firestore.collection('transactions').add(tx.toMap());
-        await _db.markTransactionAsSynced(tx.id!, doc.id);
-        print("☁️ Synced transaction ${tx.id} to Firestore");
-      } else {
-        print("⚠️ Conflict in transaction ${tx.id}. Refund required for:");
-        for (final item in refundableItems) {
-          print("- ${item.productName} x${item.quantity}");
-        }
-
-        // ❗ Trigger refund logic
-        // Option 1: Automatically create a refund transaction
-        // Option 2: Queue for user resolution with a dialog
-      }
-    }
+    // Await inside async function is valid
+    await ConflictResolver.resolveStockConflicts(localProducts, cloudProducts);
   }
-
-  // PULL Firestore products and resolve conflict
-  Future<void> syncProductsFromCloud() async {
-    final cloudSnapshot = await firestore.collection('products').get();
-    final db = await _db.database;
-
-    for (final doc in cloudSnapshot.docs) {
-      final data = doc.data();
-      final barcode = data['barcode'];
-      
-      final localProduct = await _db.getProductByBarcode(barcode);
-
-      final updatedProduct = Product(
-        id: localProduct?.id, // Use local ID if exists
-        name: data['name'],
-        barcode: barcode,
-        price: (data['price'] as num).toDouble(),
-        stockQuantity: data['stock_quantity'],
-        lastUpdated: DateTime.parse(data['last_updated']),
-        isSynced: true,
-      );
-
-      if (localProduct == null) {
-        await _db.insertProduct(updatedProduct);
-      } else {
-        await _db.updateProduct(updatedProduct);
-      }
-    }
-
-    print("⬇️ Local DB updated from Firestore (cloud is source of truth)");
-  }
-
 
   // PUSH local unsynced products to Firestore
-  Future<void> syncStockUpdatesToCloud() async {
-    final unsynced = await _db.getUnsyncedProducts();
+  Future<void> syncStockUpdatesToCloud({bool force = false}) async {
+    final allProducts = await _db.getProducts();
+    final productsToSync = force
+        ? allProducts
+        : await _db.getUnsyncedProducts();
 
-    for (final localProduct in unsynced) {
-      final cloudDoc = await firestore.collection('products').doc(localProduct.barcode).get();
-
-      if (cloudDoc.exists) {
-        final cloudData = cloudDoc.data()!;
-        final cloudTime = DateTime.parse(cloudData['last_updated']);
-
-        // Skip if cloud version is newer
-        if (cloudTime.isAfter(localProduct.lastUpdated)) {
-          print("⚠️ Skipped syncing ${localProduct.name} due to newer cloud version");
-          continue;
-        }
-      }
-
-      // Push local data to cloud
-      await firestore.collection('products').doc(localProduct.barcode).set({
-        'name': localProduct.name,
-        'barcode': localProduct.barcode,
-        'price': localProduct.price,
-        'stock_quantity': localProduct.stockQuantity,
-        'last_updated': localProduct.lastUpdated.toIso8601String(),
+    for (final product in productsToSync) {
+      await firestore.collection('products').doc(product.barcode).set({
+        'name': product.name,
+        'barcode': product.barcode,
+        'price': product.price,
+        'stock_quantity': product.stockQuantity,
+        'last_updated': product.lastUpdated.toIso8601String(),
       });
 
-      await _db.markProductAsSynced(localProduct.id!);
-      print("☁️ Synced ${localProduct.name} to Firestore");
+      await _db.markProductAsSynced(product.id!);
+      print("Synced ${product.name} to Firestore");
     }
   }
-
 }
