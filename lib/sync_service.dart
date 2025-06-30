@@ -8,7 +8,6 @@ import 'transaction.dart';
 import 'conflict_resolver.dart';
 
 class SyncService {
-  static const String baseUrl = 'https://your-api-endpoint.com/api'; // not used here
   final FirebaseFirestore firestore = FirebaseFirestore.instance;
   final DatabaseHelper _db = DatabaseHelper.instance;
 
@@ -75,7 +74,7 @@ class SyncService {
       await _db.markTransactionAsSynced(tx.id!, doc.id);
       print("Synced transaction ${tx.id} to Firestore");
 
-      // 🔁 Now update Firestore stock based on this transaction
+      // Now update Firestore stock based on this transaction
       for (final item in tx.items) {
         final productRef = firestore.collection('products').doc(item.barcode);
         final snapshot = await productRef.get();

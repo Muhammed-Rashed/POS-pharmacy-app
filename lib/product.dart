@@ -7,6 +7,10 @@ class Product {
   DateTime lastUpdated;
   bool isSynced;
 
+  // 'id' is only used locally in SQLite
+  // 'barcode' is used as Firestore doc ID
+
+
   Product({
     this.id,
     required this.name,
@@ -49,6 +53,7 @@ class Product {
       'price': price,
       'stock_quantity': stockQuantity,
       'last_updated': lastUpdated.toIso8601String(),
+      'is_synced': isSynced ? 1 : 0,
     };
   }
 
@@ -60,7 +65,20 @@ class Product {
       price: json['price'].toDouble(),
       stockQuantity: json['stock_quantity'],
       lastUpdated: DateTime.parse(json['last_updated']),
-      isSynced: true, // Assume data from cloud is synced
+      isSynced: true,
     );
   }
+
+  factory Product.fromFirestore(Map<String, dynamic> data) {
+    return Product(
+      id: null,
+      name: data['name'],
+      barcode: data['barcode'],
+      price: (data['price'] as num).toDouble(),
+      stockQuantity: data['stock_quantity'],
+      lastUpdated: DateTime.tryParse(data['last_updated']) ?? DateTime.now(),
+      isSynced: true,
+    );
+  }
+
 }

@@ -17,11 +17,11 @@ import 'cart_manager.dart';
 void main() async {
   WidgetsFlutterBinding.ensureInitialized();
 
-  // Initialize SQLite FFI (local database for desktop) FIRST
+  // Initialize SQLite FFI local database
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  // Initialize Firebase (cloud backend)
+  // Initialize Firebase cloud backend
   await Firebase.initializeApp(
     options: DefaultFirebaseOptions.currentPlatform,
   );
@@ -191,18 +191,6 @@ class _MyAppState extends State<MyApp> {
                   : null,
             ),
           ),
-
-          // Settings tile (optional: wrap with Builder if needed)
-          Builder(
-            builder: (innerContext) => ListTile(
-              leading: const Icon(Icons.settings),
-              title: const Text('Settings'),
-              onTap: () {
-                Navigator.pop(innerContext); // Optional: close drawer
-                // Navigate to settings if needed
-              },
-            ),
-          ),
         ],
       ),
     );
@@ -256,7 +244,7 @@ class _MyAppState extends State<MyApp> {
   }
 }
 
-// Enhanced Sales Entry Page with Multi-Tab Cart System
+// Sales Entry Page
 class SalesEntryPage extends StatefulWidget {
   final VoidCallback? onSaleCompleted;
 
@@ -369,7 +357,7 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
         return CartItem(
           productId: item.productId,
           productName: item.productName,
-          barcode: product.barcode, //  Add barcode from Product
+          barcode: product.barcode,
           price: item.price,
           quantity: item.quantity,
         );
@@ -629,26 +617,6 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
 
     return Column(
       children: [
-        // Customer Name Editor
-        Padding(
-          padding: const EdgeInsets.all(16),
-          child: TextField(
-            decoration: const InputDecoration(
-              labelText: 'Customer Name',
-              border: OutlineInputBorder(),
-              prefixIcon: Icon(Icons.person),
-            ),
-            controller: TextEditingController(text: activeCart.customerName),
-            onChanged: (value) {
-              try {
-                cartManager.updateCartCustomerName(cartManager.activeCartIndex, value);
-              } catch (e) {
-                _showErrorSnackBar(e.toString());
-              }
-            },
-          ),
-        ),
-        
         // Cart Items
         Expanded(
           child: activeCart.items.isEmpty
@@ -800,7 +768,6 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
   }
 
   Future<void> _processFullRefund(PosTransaction transaction) async {
-    // Create refund transaction
     final refundTransaction = PosTransaction(
       items: transaction.items.map((item) => CartItem(
       productId: item.productId,
