@@ -1,5 +1,4 @@
 import 'dart:async';
-import 'package:cloud_firestore/cloud_firestore.dart';
 import 'package:sqflite_common_ffi/sqflite_ffi.dart';
 import 'package:path/path.dart';
 import 'product.dart';
@@ -182,34 +181,5 @@ class DatabaseHelper {
   Future<void> close() async {
     final db = await instance.database;
     db.close();
-  }
-
-  Future<void> resetFromFirestore() async {
-    final firestore = FirebaseFirestore.instance;
-    final db = await database;
-
-    await db.delete('products');
-    await db.delete('transactions');
-
-    final productSnapshot = await firestore.collection('products').get();
-    print('Found ${productSnapshot.docs.length} products in Firestore.');
-    for (final doc in productSnapshot.docs) {
-      final product = Product.fromJson(doc.data());
-      await db.insert('products', product.toMap());
-      print('Inserted product: ${product.name}');
-    }
-
-    final transactionSnapshot = await firestore.collection('transactions').get();
-    print('Found ${transactionSnapshot.docs.length} transactions in Firestore.');
-    for (final doc in transactionSnapshot.docs) {
-      final data = doc.data();
-      final transaction = PosTransaction.fromJson(data, cloudId: doc.id);
-      final map = transaction.toMap();
-      map.remove('id');
-      await db.insert('transactions', map);
-      print('Inserted transaction: \$${transaction.totalAmount} @ ${transaction.timestamp}');
-    }
-
-    print('✅ Local DB reset from Firestore completed successfully.');
   }
 }

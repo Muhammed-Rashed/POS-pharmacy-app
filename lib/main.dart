@@ -25,11 +25,6 @@ void main() async {
   sqfliteFfiInit();
   databaseFactory = databaseFactoryFfi;
 
-  const bool shouldResetFromCloud = true; // set to true ONLY when testing
-  if (shouldResetFromCloud) {
-    await DatabaseHelper.instance.resetFromFirestore();
-  }
-
   // Make sure database is ready before app runs
   await DatabaseHelper.instance.database;
 
@@ -41,10 +36,15 @@ class MyApp extends StatefulWidget {
 
   @override
   State<MyApp> createState() => _MyAppState();
+
+  
 }
 
 class _MyAppState extends State<MyApp> {
   final GlobalKey<ScaffoldState> _scaffoldKey = GlobalKey<ScaffoldState>();
+  final GlobalKey<_TransactionHistoryPageState> _historyKey = GlobalKey<_TransactionHistoryPageState>();
+  final ValueNotifier<bool> historyRefreshTrigger = ValueNotifier(false);
+
   int _selectedIndex = 0;
   String searchQuery = '';
   bool isOnline = false;
@@ -55,6 +55,7 @@ class _MyAppState extends State<MyApp> {
     super.initState();
     _checkConnectivity();
     _setupConnectivityListener();
+    _setupOnlineSyncListener();
   }
 
   void _checkConnectivity() async {
@@ -65,6 +66,7 @@ class _MyAppState extends State<MyApp> {
     
     if (isOnline) {
       _syncService.performSync();
+      historyRefreshTrigger.value = !historyRefreshTrigger.value;
     }
   }
 
@@ -76,9 +78,28 @@ class _MyAppState extends State<MyApp> {
       
       if (isOnline) {
         _syncService.performSync();
+        historyRefreshTrigger.value = !historyRefreshTrigger.value;
       }
     });
   }
+
+  void _setupOnlineSyncListener() {
+    Connectivity().onConnectivityChanged.listen((ConnectivityResult result) {
+      if (result != ConnectivityResult.none) {
+        SyncService().performSync(); // Ensure SyncService is accessible
+      }
+    });
+  }
+
+  List<Widget> get _pages => [
+    SalesEntryPage(
+      onSaleCompleted: () {
+        historyRefreshTrigger.value = !historyRefreshTrigger.value;
+      },
+    ),
+    TransactionHistoryPage(refreshTrigger: historyRefreshTrigger),
+  ];
+
 
   @override
   Widget build(BuildContext context) {
@@ -95,10 +116,16 @@ class _MyAppState extends State<MyApp> {
           drawer: _buildDrawer(),
           appBar: _buildAppBar(),
           body: IndexedStack(
-            index: _selectedIndex,
-            children: const [
-              SalesEntryPage(),
-              TransactionHistoryPage(),
+          index: _selectedIndex,
+            children: [
+              SalesEntryPage(
+                onSaleCompleted: () {
+                  historyRefreshTrigger.value = !historyRefreshTrigger.value;
+                },
+              ),
+              TransactionHistoryPage(
+                refreshTrigger: historyRefreshTrigger,
+              ),
             ],
           ),
           bottomNavigationBar: _buildBottomNavigation(),
@@ -115,6 +142,7 @@ class _MyAppState extends State<MyApp> {
           DrawerHeader(
             decoration: const BoxDecoration(color: Colors.cyan),
             child: Column(
+              
               crossAxisAlignment: CrossAxisAlignment.start,
               children: [
                 const Text('Pharmacy POS', 
@@ -207,7 +235,9 @@ class _MyAppState extends State<MyApp> {
 
 // Enhanced Sales Entry Page with Multi-Tab Cart System
 class SalesEntryPage extends StatefulWidget {
-  const SalesEntryPage({super.key});
+  final VoidCallback? onSaleCompleted;
+
+  const SalesEntryPage({super.key, this.onSaleCompleted});
 
   @override
   State<SalesEntryPage> createState() => _SalesEntryPageState();
@@ -294,7 +324,9 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
     }
   }
 
-  Future<void> _checkout() async {
+  bool isOfflineMode = false;
+
+Future<void> _checkout() async {
   final cartManager = Provider.of<CartManager>(context, listen: false);
   final activeCart = cartManager.activeCart;
 
@@ -324,7 +356,7 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
     final transactionId = await DatabaseHelper.instance.insertTransaction(transaction);
     print('Inserted transaction ID: $transactionId');
 
-    if (transactionId == 0 || transactionId == null) {
+    if (transactionId == 0) {
       throw Exception('Transaction insert failed');
     }
 
@@ -334,11 +366,22 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
       await DatabaseHelper.instance.updateProduct(product);
     }
 
+    // ✅ Sync to cloud if online
+    if (!isOfflineMode) {
+      await SyncService().performSync();
+    } else {
+      print("🛑 Offline mode is ON. Skipping sync.");
+    }
+
+    // ✅ Clear cart and update UI
     cartManager.closeCart(cartManager.activeCartIndex);
     _updateCartTabController();
 
     await _loadProducts();
-    _showSuccessSnackBar('Checkout successful');
+
+    widget.onSaleCompleted?.call();
+    _showSuccessSnackBar(
+      'Checkout successful${isOfflineMode ? ' (offline)' : ' and synced to cloud'}');
 
   } catch (e) {
     _showErrorSnackBar('Checkout failed: $e');
@@ -682,7 +725,9 @@ class _SalesEntryPageState extends State<SalesEntryPage> with TickerProviderStat
 }
 
 class TransactionHistoryPage extends StatefulWidget {
-  const TransactionHistoryPage({super.key});
+  final ValueNotifier<bool>? refreshTrigger;
+
+  const TransactionHistoryPage({super.key, this.refreshTrigger});
 
   @override
   State<TransactionHistoryPage> createState() => _TransactionHistoryPageState();
@@ -691,12 +736,21 @@ class TransactionHistoryPage extends StatefulWidget {
 class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
   List<PosTransaction> transactions = [];
   List<Product> products = [];
+  void reload() {
+    _loadTransactions();
+    _loadProducts();
+  }
 
   @override
   void initState() {
     super.initState();
     _loadTransactions();
     _loadProducts();
+
+    widget.refreshTrigger?.addListener(() {
+      _loadTransactions();
+      _loadProducts();
+    });
   }
 
   Future<void> _loadTransactions() async {
