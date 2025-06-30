@@ -796,6 +796,8 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     await _loadTransactions();
     await _loadProducts();
 
+    await SyncService().syncStockUpdatesToCloud();
+
     if (mounted) {
       ScaffoldMessenger.of(context).showSnackBar(
         const SnackBar(content: Text('Full refund processed successfully!')),
@@ -1048,6 +1050,8 @@ class _PartialRefundDialogState extends State<PartialRefundDialog> {
     }
 
     widget.onRefundComplete();
+
+    await SyncService().syncStockUpdatesToCloud();
     
     if (mounted) {
       Navigator.pop(context);

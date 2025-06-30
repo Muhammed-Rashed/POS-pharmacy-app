@@ -74,7 +74,6 @@ class SyncService {
       await _db.markTransactionAsSynced(tx.id!, doc.id);
       print("Synced transaction ${tx.id} to Firestore");
 
-      // Now update Firestore stock based on this transaction
       for (final item in tx.items) {
         final productRef = firestore.collection('products').doc(item.barcode);
         final snapshot = await productRef.get();
@@ -82,16 +81,20 @@ class SyncService {
         if (snapshot.exists) {
           final data = snapshot.data()!;
           final currentStock = data['stock_quantity'] ?? 0;
-          final newStock = currentStock - item.quantity;
+
+          final isRefund = tx.isRefund == true;
+          final newStock = isRefund
+              ? currentStock + item.quantity
+              : currentStock - item.quantity;
 
           await productRef.update({
             'stock_quantity': newStock,
             'last_updated': DateTime.now().toIso8601String(),
           });
 
-          print('Updated stock for ${item.productName} in Firestore: $newStock');
+          print('${isRefund ? 'Restored' : 'Updated'} stock for ${item.productName} in Firestore: $newStock');
         } else {
-          print('Product ${item.productName} not found in Firestore');
+          print('⚠️ Product ${item.productName} not found in Firestore');
         }
       }
     }
