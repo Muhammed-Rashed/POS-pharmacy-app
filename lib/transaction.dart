@@ -1,5 +1,6 @@
 import 'dart:convert';
 import 'cart_item.dart';
+import 'package:cloud_firestore/cloud_firestore.dart';
 
 class PosTransaction {
   int? id;
@@ -73,17 +74,26 @@ class PosTransaction {
       itemsJson = [];
     }
 
+    final timestampField = json['timestamp'];
+    DateTime parsedTimestamp;
+    if (timestampField is String) {
+      parsedTimestamp = DateTime.parse(timestampField);
+    } else if (timestampField is Timestamp) {
+      parsedTimestamp = timestampField.toDate();
+    } else {
+      parsedTimestamp = DateTime.now(); // fallback
+    }
+
     return PosTransaction(
       items: itemsJson.map((item) => CartItem.fromJson(item)).toList(),
-      totalAmount: (json['total_amount'] as num).toDouble(),
-      timestamp: DateTime.parse(json['timestamp']),
+      totalAmount: (json['total_amount'] ?? json['totalAmount'] as num).toDouble(),
+      timestamp: parsedTimestamp,
       isSynced: true,
       cloudId: cloudId ?? json['id']?.toString(),
       isRefund: json['isRefund'] is int
           ? json['isRefund'] == 1
-          : json['isRefund'] as bool?,
+          : json['isRefund'] as bool? ?? false,
       originalTransactionId: json['originalTransactionId'],
     );
   }
-
 }

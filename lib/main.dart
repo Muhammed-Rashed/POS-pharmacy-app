@@ -753,12 +753,17 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     });
   }
 
+  bool showCloudTransactions = true;
+
   Future<void> _loadTransactions() async {
-    final loadedTransactions = await DatabaseHelper.instance.getTransactions();
-    setState(() {
-      transactions = loadedTransactions;
-    });
+    if (showCloudTransactions) {
+      transactions = await SyncService().fetchTransactionsFromCloud();
+    } else {
+      transactions = await DatabaseHelper.instance.getTransactions();
+    }
+    setState(() {});
   }
+
 
   Future<void> _loadProducts() async {
     final loadedProducts = await DatabaseHelper.instance.getProducts();
@@ -858,96 +863,121 @@ class _TransactionHistoryPageState extends State<TransactionHistoryPage> {
     }
   }
 
-  @override
+ @override
   Widget build(BuildContext context) {
-    return ListView.builder(
-      padding: const EdgeInsets.all(16),
-      itemCount: transactions.length,
-      itemBuilder: (context, index) {
-        final transaction = transactions[index];
-        final status = _getTransactionStatus(transaction);
-        final isRefundable = transaction.isRefund != true && 
-                           !status.contains('Refunded');
-
-        return Card(
-          margin: const EdgeInsets.only(bottom: 8),
-          child: ExpansionTile(
-            title: Row(
-              children: [
-                Expanded(
-                  child: Text('Transaction #${transaction.id}'),
-                ),
-                Container(
-                  padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
-                  decoration: BoxDecoration(
-                    color: _getStatusColor(status).withOpacity(0.2),
-                    borderRadius: BorderRadius.circular(12),
-                    border: Border.all(color: _getStatusColor(status)),
-                  ),
-                  child: Text(
-                    status,
-                    style: TextStyle(
-                      color: _getStatusColor(status),
-                      fontSize: 12,
-                      fontWeight: FontWeight.bold,
-                    ),
-                  ),
-                ),
-              ],
-            ),
-            subtitle: Text(
-              '${transaction.timestamp.toString().split('.')[0]} - \$${transaction.totalAmount.toStringAsFixed(2)}',
-            ),
-            trailing: Row(
-              mainAxisSize: MainAxisSize.min,
-              children: [
-                Icon(
-                  transaction.isSynced ? Icons.cloud_done : Icons.cloud_upload,
-                  color: transaction.isSynced ? Colors.green : Colors.orange,
-                ),
-                if (!transaction.isSynced) const Text(' Pending'),
-              ],
-            ),
+    return Column(
+      children: [
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
+          child: Row(
+            mainAxisAlignment: MainAxisAlignment.spaceBetween,
             children: [
-              ...transaction.items.map((item) => 
-                ListTile(
-                  title: Text(item.productName),
-                  trailing: Text('${item.quantity} x \$${item.price.toStringAsFixed(2)}'),
-                )
+              const Text('Show Cloud Transactions'),
+              Switch(
+                value: showCloudTransactions,
+                onChanged: (value) {
+                  setState(() {
+                    showCloudTransactions = value;
+                  });
+                  _loadTransactions(); // reload transactions based on the toggle
+                },
               ),
-              if (isRefundable) 
-                Padding(
-                  padding: const EdgeInsets.all(16),
-                  child: Row(
-                    mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+            ],
+          ),
+        ),
+        Expanded(
+          child: ListView.builder(
+            padding: const EdgeInsets.all(16),
+            itemCount: transactions.length,
+            itemBuilder: (context, index) {
+              final transaction = transactions[index];
+              final status = _getTransactionStatus(transaction);
+              final isRefundable = transaction.isRefund != true &&
+                  !status.contains('Refunded');
+
+              return Card(
+                margin: const EdgeInsets.only(bottom: 8),
+                child: ExpansionTile(
+                  title: Row(
                     children: [
-                      ElevatedButton.icon(
-                        onPressed: () => _showPartialRefundDialog(transaction),
-                        icon: const Icon(Icons.edit),
-                        label: const Text('Partial Refund'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.orange,
-                          foregroundColor: Colors.white,
-                        ),
+                      Expanded(
+                        child: Text('Transaction #${transaction.id ?? transaction.cloudId ?? "N/A"}'),
                       ),
-                      ElevatedButton.icon(
-                        onPressed: () => _showFullRefundConfirmation(transaction),
-                        icon: const Icon(Icons.undo),
-                        label: const Text('Full Refund'),
-                        style: ElevatedButton.styleFrom(
-                          backgroundColor: Colors.red,
-                          foregroundColor: Colors.white,
+                      Container(
+                        padding: const EdgeInsets.symmetric(horizontal: 8, vertical: 4),
+                        decoration: BoxDecoration(
+                          color: _getStatusColor(status).withOpacity(0.2),
+                          borderRadius: BorderRadius.circular(12),
+                          border: Border.all(color: _getStatusColor(status)),
+                        ),
+                        child: Text(
+                          status,
+                          style: TextStyle(
+                            color: _getStatusColor(status),
+                            fontSize: 12,
+                            fontWeight: FontWeight.bold,
+                          ),
                         ),
                       ),
                     ],
                   ),
+                  subtitle: Text(
+                    '${transaction.timestamp.toString().split('.')[0]} - \$${transaction.totalAmount.toStringAsFixed(2)}',
+                  ),
+                  trailing: Row(
+                    mainAxisSize: MainAxisSize.min,
+                    children: [
+                      Icon(
+                        transaction.isSynced ? Icons.cloud_done : Icons.cloud_upload,
+                        color: transaction.isSynced ? Colors.green : Colors.orange,
+                      ),
+                      if (!transaction.isSynced) const Text(' Pending'),
+                    ],
+                  ),
+                  children: [
+                    ...transaction.items.map((item) =>
+                      ListTile(
+                        title: Text(item.productName),
+                        trailing: Text('${item.quantity} x \$${item.price.toStringAsFixed(2)}'),
+                      )
+                    ),
+                    if (isRefundable)
+                      Padding(
+                        padding: const EdgeInsets.all(16),
+                        child: Row(
+                          mainAxisAlignment: MainAxisAlignment.spaceEvenly,
+                          children: [
+                            ElevatedButton.icon(
+                              onPressed: () => _showPartialRefundDialog(transaction),
+                              icon: const Icon(Icons.edit),
+                              label: const Text('Partial Refund'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.orange,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                            ElevatedButton.icon(
+                              onPressed: () => _showFullRefundConfirmation(transaction),
+                              icon: const Icon(Icons.undo),
+                              label: const Text('Full Refund'),
+                              style: ElevatedButton.styleFrom(
+                                backgroundColor: Colors.red,
+                                foregroundColor: Colors.white,
+                              ),
+                            ),
+                          ],
+                        ),
+                      ),
+                  ],
                 ),
-            ],
+              );
+            },
           ),
-        );
-      },
+        ),
+      ],
     );
   }
+
 
   Future<void> _showFullRefundConfirmation(PosTransaction transaction) async {
     final confirmed = await showDialog<bool>(

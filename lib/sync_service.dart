@@ -142,4 +142,18 @@ class SyncService {
       print("Synced ${product.name} to Firestore");
     }
   }
+
+  // Pull Transactions from cloud
+  Future<List<PosTransaction>> fetchTransactionsFromCloud() async {
+    final snapshot = await firestore
+        .collection('transactions')
+        .orderBy('timestamp', descending: true)
+        .get();
+
+    return snapshot.docs.map((doc) {
+      final data = doc.data();
+      return PosTransaction.fromJson(data, cloudId: doc.id);
+    }).toList();
+  }
+
 }
