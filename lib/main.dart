@@ -121,7 +121,6 @@ class _MyAppState extends State<MyApp> {
         ),
         home: Scaffold(
           key: _scaffoldKey,
-          drawer: _buildDrawer(),
           appBar: _buildAppBar(),
           body: IndexedStack(
           index: _selectedIndex,
@@ -142,92 +141,47 @@ class _MyAppState extends State<MyApp> {
     );
   }
 
- Widget _buildDrawer() {
-    return Drawer(
-      child: ListView(
-        padding: EdgeInsets.zero,
-        children: [
-          DrawerHeader(
-            decoration: const BoxDecoration(color: Colors.cyan),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
-              children: [
-                const Text(
-                  'Pharmacy POS',
-                  style: TextStyle(color: Colors.white, fontSize: 24),
-                ),
-                const SizedBox(height: 10),
-                Row(
-                  children: [
-                    Icon(
-                      isOnline ? Icons.cloud_done : Icons.cloud_off,
-                      color: isOnline ? Colors.green : Colors.red,
-                    ),
-                    const SizedBox(width: 8),
-                    Text(
-                      isOnline ? 'Online' : 'Offline',
-                      style: TextStyle(
-                        color: isOnline ? Colors.green : Colors.red,
-                        fontWeight: FontWeight.bold,
-                      ),
-                    ),
-                  ],
-                ),
-              ],
-            ),
-          ),
-
-          // Sync Now ListTile wrapped with Builder
-          Builder(
-            builder: (innerContext) => ListTile(
-              leading: const Icon(Icons.sync),
-              title: const Text('Sync Now'),
-              enabled: isOnline,
-              onTap: isOnline
-                  ? () {
-                      _syncService.performSync();
-                      Navigator.pop(innerContext); // Safe context
-                    }
-                  : null,
-            ),
-          ),
-        ],
-      ),
-    );
-  }
-
   PreferredSizeWidget _buildAppBar() {
     return AppBar(
       backgroundColor: Colors.cyan,
       foregroundColor: Colors.white,
-      leading: IconButton(
-        icon: const Icon(Icons.menu),
-        onPressed: () => _scaffoldKey.currentState?.openDrawer(),
-      ),
       title: const Text('Pharmacy POS'),
       actions: [
-        Container(
-          width: 200,
-          margin: const EdgeInsets.only(right: 10),
-          child: TextField(
-            onChanged: (value) => setState(() => searchQuery = value),
-            style: const TextStyle(color: Colors.white),
-            decoration: InputDecoration(
-              contentPadding: const EdgeInsets.symmetric(vertical: 10, horizontal: 15),
-              hintText: 'Search products...',
-              hintStyle: const TextStyle(color: Colors.white70),
-              filled: true,
-              fillColor: Colors.white24,
-              border: OutlineInputBorder(
-                borderRadius: BorderRadius.circular(20),
-                borderSide: BorderSide.none,
+        Row(
+          children: [
+            Icon(
+              isOnline ? Icons.cloud_done : Icons.cloud_off,
+              color: isOnline ? Colors.green : Colors.red,
+            ),
+            const SizedBox(width: 4),
+            Text(
+              isOnline ? 'Online' : 'Offline',
+              style: TextStyle(
+                color: isOnline ? Colors.green : Colors.red,
+                fontWeight: FontWeight.bold,
               ),
             ),
-          ),
+            const SizedBox(width: 12),
+            IconButton(
+              icon: const Icon(Icons.sync),
+              tooltip: 'Sync Now',
+              onPressed: isOnline
+                  ? () {
+                      _syncService.performSync();
+                      ScaffoldMessenger.of(_scaffoldKey.currentContext!)
+                          .showSnackBar(
+                        const SnackBar(content: Text('Sync started...')),
+                      );
+                    }
+                  : null, // Disabled when offline
+              color: isOnline ? Colors.white : Colors.grey[400],
+            ),
+          ],
         ),
       ],
     );
   }
+
 
   Widget _buildBottomNavigation() {
     return BottomNavigationBar(
